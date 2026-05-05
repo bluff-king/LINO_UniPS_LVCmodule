@@ -37,7 +37,7 @@ def create_wavelet_filter(wave, in_size, out_size, type=torch.float):
 def wavelet_transform(x, filters):
     b, c, h, w = x.shape
     pad = (filters.shape[2] // 2 - 1, filters.shape[3] // 2 - 1)
-    x = F.conv2d(x, filters, stride=2, groups=c, padding=pad)
+    x = F.conv2d(x.to(filters.dtype), filters, stride=2, groups=c, padding=pad)
     x = x.reshape(b, c, 4, h // 2, w // 2)
     return x
 
@@ -46,7 +46,7 @@ def inverse_wavelet_transform(x, filters):
     b, c, _, h_half, w_half = x.shape
     pad = (filters.shape[2] // 2 - 1, filters.shape[3] // 2 - 1)
     x = x.reshape(b, c * 4, h_half, w_half)
-    x = F.conv_transpose2d(x, filters, stride=2, groups=c, padding=pad)
+    x = F.conv_transpose2d(x.to(filters.dtype), filters, stride=2, groups=c, padding=pad)
     return x
 
 class ResidualConvUnit(nn.Module):

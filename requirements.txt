@@ -21,7 +21,7 @@ rich==14.0.0
 safetensors==0.5.3
 scikit_learn==1.7.0
 scipy==1.15.3
-scikit-image==0.21.0
+scikit-image
 spconv_cu124==2.3.8
 tqdm==4.67.1
 transformers==4.46.3
@@ -29,3 +29,5 @@ trimesh==4.6.12
 wandb==0.20.1
 xformers==0.0.27.post2
 huggingface_hub==0.33.0
+kornia
+PyWavelets

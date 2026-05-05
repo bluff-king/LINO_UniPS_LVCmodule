@@ -382,9 +382,10 @@ if __name__ == "__main__":
     # Download and cache the weights
     cache_weights(WEIGHTS_DIR)
 
-    hi3dgen_pipeline = Hi3DGenPipeline.from_pretrained("weights/trellis-normal-v0-1")
-    hi3dgen_pipeline.cuda()    
+    # hi3dgen_pipeline = Hi3DGenPipeline.from_pretrained("weights/trellis-normal-v0-1")
+    # hi3dgen_pipeline.cuda()    
     predictor = torch.hub.load("houyuanchen111/LINO_UniPS","LINO", local_file_path="weights/lino/lino.pth")
-    demo.launch(share=False, server_name="0.0.0.0")
+    predictor.model = predictor.model.to(torch.bfloat16)
+    demo.launch(share=True)
 
 
