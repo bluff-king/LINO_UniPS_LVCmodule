@@ -1,5 +1,7 @@
 from torch.utils.data import DataLoader
-from src.data.data_train_module import TrainData
+from src.data.data_hdlong import HDLongDataset
+# data_train_module is imported lazily inside train_model() since it
+# requires pyexr (not needed for the hdlong dataset path).
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 import argparse
@@ -19,22 +21,44 @@ VARIANT_MAP = {
 }
 
 def train_model(args):
-    train_data = TrainData(
-        mode='Train',
-        data_root=args.data_root,
-        low_normal=args.low_normal
-    )
+    # ------------------------------------------------------------------ #
+    # Dataset                                                              #
+    # ------------------------------------------------------------------ #
+    if args.dataset == "hdlong":
+        train_data = HDLongDataset(
+            mode='Train',
+            data_root=args.data_root,
+            numImages=args.num_input_images,
+            image_size=args.image_size,
+            repeat=args.repeat,
+        )
+        val_data = HDLongDataset(
+            mode='Val',
+            data_root=args.data_root,
+            numImages=args.num_input_images,
+            image_size=args.image_size,
+            repeat=max(1, args.repeat // 4),
+        )
+    else:
+        # Lazy import: only needs pyexr when the lino dataset is actually used.
+        from src.data.data_train_module import TrainData
+        train_data = TrainData(
+            mode='Train',
+            data_root=args.data_root,
+            low_normal=args.low_normal
+        )
+        val_data = TrainData(
+            mode='Val',
+            data_root=args.data_root,
+            low_normal=args.low_normal
+        )
+
     train_loader = DataLoader(
         train_data,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
         pin_memory=True
-    )
-    val_data = TrainData(
-        mode='Val',
-        data_root=args.data_root,
-        low_normal=args.low_normal
     )
     val_loader = DataLoader(
         val_data,
@@ -88,6 +112,36 @@ def train_model(args):
     # Use the variant name in the checkpoint filename so runs don't collide
     ckpt_filename = f"{args.variant}_{{epoch:02d}}_{{val_loss:.4f}}"
 
+    # ------------------------------------------------------------------ #
+    # Logger selection                                                     #
+    # ------------------------------------------------------------------ #
+    loggers = []
+    if args.logger in ("tensorboard", "both"):
+        loggers.append(pl.loggers.TensorBoardLogger(
+            save_dir=args.save_dir,
+            name=f"lightning_logs/{args.variant}",
+        ))
+    if args.logger in ("wandb", "both"):
+        # Lazy import so users without wandb installed can still use TB-only.
+        from pytorch_lightning.loggers import WandbLogger
+        from datetime import datetime
+        # Default run name: <variant>-YYYYMMDD-HHMMSS (so each invocation is unique)
+        run_name = args.wandb_run_name or (
+            f"{args.variant}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        )
+        wandb_kwargs = dict(
+            project=args.wandb_project,
+            name=run_name,
+            save_dir=args.save_dir,
+            log_model=False,        # Don't upload checkpoints (large bf16 model)
+            config=vars(args),       # Log all CLI args as wandb config
+        )
+        if args.wandb_entity:
+            wandb_kwargs["entity"] = args.wandb_entity
+        if args.wandb_tags:
+            wandb_kwargs["tags"] = args.wandb_tags.split(",")
+        loggers.append(WandbLogger(**wandb_kwargs))
+
     trainer = pl.Trainer(
         accelerator="auto",
         devices=args.devices,
@@ -110,13 +164,19 @@ def train_model(args):
             ),
             pl.callbacks.LearningRateMonitor(logging_interval="epoch")
         ],
-        logger=pl.loggers.TensorBoardLogger(
-            save_dir=args.save_dir,
-            name=f"lightning_logs/{args.variant}"
-        )
+        logger=loggers if loggers else False,
     )
 
     trainer.fit(model, train_loader, val_loader)
+
+    # Cleanly close wandb run (important when running multiple variants in one Python process)
+    if args.logger in ("wandb", "both"):
+        try:
+            import wandb
+            if wandb.run is not None:
+                wandb.finish()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LiNO UniPS Training Script")
@@ -169,10 +229,38 @@ if __name__ == "__main__":
     # Data                                                                 #
     # ------------------------------------------------------------------ #
     parser.add_argument(
+        "--dataset",
+        type=str,
+        choices=["lino", "hdlong"],
+        default="lino",
+        help="Which dataset format to use. 'lino' = original LiNo-UniPS layout; "
+             "'hdlong' = HDL-long synthetic mixed-light dataset."
+    )
+    parser.add_argument(
+        "--num_input_images",
+        type=int,
+        default=6,
+        help="K = number of input images per sample (hdlong only)"
+    )
+    parser.add_argument(
+        "--image_size",
+        type=int,
+        default=256,
+        help="Resize all images to this resolution (hdlong only). "
+             "HDLong native is 256, so default skips the resize."
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Virtual length multiplier for tiny datasets (hdlong only). "
+             "With 1 object and --repeat 64, an epoch has 64 steps."
+    )
+    parser.add_argument(
         "--low_normal",
         type=bool,
         default=True,
-        help="Low normal mode or high normal mode"
+        help="Low normal mode or high normal mode (lino dataset only)"
     )
     parser.add_argument(
         "--data_root",
@@ -199,7 +287,7 @@ if __name__ == "__main__":
         "--depth",
         type=int,
         default=4,
-        help="Depth of the network, default is 4"
+        help="Depth of the network. MUST be 4 — fusion scratch hardcodes 4 layers."
     )
     parser.add_argument(
         "--canonical_resolution",
@@ -257,6 +345,42 @@ if __name__ == "__main__":
         type=int,
         default=10,
         help="Early stopping patience"
+    )
+
+    # ------------------------------------------------------------------ #
+    # Logging (TensorBoard / W&B)                                          #
+    # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--logger",
+        type=str,
+        choices=["tensorboard", "wandb", "both", "none"],
+        default="tensorboard",
+        help="Logger backend. 'wandb' requires `pip install wandb` and "
+             "`wandb login` (or WANDB_API_KEY env var) beforehand."
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="lino-lvc",
+        help="W&B project name (default 'lino-lvc')"
+    )
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default=None,
+        help="W&B entity / username (optional; defaults to your default entity)"
+    )
+    parser.add_argument(
+        "--wandb_run_name",
+        type=str,
+        default=None,
+        help="W&B run name. Default: {variant}-YYYYMMDD-HHMMSS (timestamp at run start)"
+    )
+    parser.add_argument(
+        "--wandb_tags",
+        type=str,
+        default=None,
+        help="Comma-separated W&B tags, e.g. 'ablation,kaggle,t4'"
     )
 
     # ------------------------------------------------------------------ #

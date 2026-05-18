@@ -1,8 +1,9 @@
 """
 Lighting Variation Confidence (LVC) module.
 
-Estimates per-pixel reconstruction reliability from the normalised intensity
-variance (CV2) across K input images.  Requires no learned parameters.
+Estimates per-pixel reconstruction reliability R(p) from the normalised
+intensity variance (CV2) across K input images. Requires no learned
+parameters.
 
 Reference: thesis Chapter 3, Section 3.3.
 """
@@ -14,12 +15,12 @@ import torch.nn.functional as F
 
 class LVCModule(nn.Module):
     """
-    Parameter-free confidence estimator based on the coefficient of variation
+    Parameter-free reliability estimator based on the coefficient of variation
     squared (CV2) of pixel intensities across input images.
 
     Args:
         alpha    : sensitivity of the exponential mapping (default 10).
-        w_min    : minimum training weight for low-confidence pixels (default 0.1).
+        w_min    : minimum training weight for low-reliability pixels (default 0.1).
         eps      : numerical stability constant (default 1e-6).
         per_channel: if True, compute CV2 per channel and take the max over
                      channels (preferred for specular scenes); otherwise use
@@ -57,8 +58,8 @@ class LVCModule(nn.Module):
     # Public API
     # ------------------------------------------------------------------
 
-    def confidence_map(self, images: torch.Tensor) -> torch.Tensor:
-        """Global per-pixel confidence C(p) in [0, 1].
+    def reliability_map(self, images: torch.Tensor) -> torch.Tensor:
+        """Global per-pixel reliability R(p) in [0, 1].
 
         images : [B, C, H, W, N]  — raw (un-normalised) float32 images
         Returns: [B, H, W]
@@ -71,16 +72,16 @@ class LVCModule(nn.Module):
             cv2 = self._cv2_along_last(gray)     # [B, H, W]
         return 1.0 - torch.exp(-self.alpha * cv2)
 
-    def loss_weights(self, confidence: torch.Tensor) -> torch.Tensor:
-        """Per-pixel training weight w(p) = w_min + (1 - w_min) * C(p).
+    def loss_weights(self, reliability: torch.Tensor) -> torch.Tensor:
+        """Per-pixel training weight w(p) = w_min + (1 - w_min) * R(p).
 
-        confidence : [B, H, W]  or any shape
-        Returns    : same shape, values in [w_min, 1]
+        reliability : [B, H, W]  or any shape
+        Returns     : same shape, values in [w_min, 1]
         """
-        return self.w_min + (1.0 - self.w_min) * confidence
+        return self.w_min + (1.0 - self.w_min) * reliability
 
-    def per_image_confidence(self, images: torch.Tensor) -> torch.Tensor:
-        """Per-image per-pixel confidence C_k(p) in [0, 1].
+    def per_image_reliability(self, images: torch.Tensor) -> torch.Tensor:
+        """Per-image per-pixel reliability R_k(p) in [0, 1].
 
         images : [B, C, H, W, N]
         Returns: [B, N, H, W]
@@ -94,13 +95,13 @@ class LVCModule(nn.Module):
             diff_sq = diff_sq.mean(dim=1)            # [B, H, W, N]
             mu_g = mu.mean(dim=1)                    # [B, H, W, 1]
             cv2_k = diff_sq / (mu_g ** 2 + self.eps) # [B, H, W, N]
-        c_k = 1.0 - torch.exp(-self.alpha * cv2_k)  # [B, H, W, N]
-        return c_k.permute(0, 3, 1, 2)              # [B, N, H, W]
+        r_k = 1.0 - torch.exp(-self.alpha * cv2_k)  # [B, H, W, N]
+        return r_k.permute(0, 3, 1, 2)              # [B, N, H, W]
 
     def forward(self, images: torch.Tensor):
-        """Convenience wrapper returning both confidence maps.
+        """Convenience wrapper returning both reliability maps.
 
         images : [B, C, H, W, N]
-        Returns: (C [B, H, W], C_k [B, N, H, W])
+        Returns: (R [B, H, W], R_k [B, N, H, W])
         """
-        return self.confidence_map(images), self.per_image_confidence(images)
+        return self.reliability_map(images), self.per_image_reliability(images)

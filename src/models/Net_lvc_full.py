@@ -2,11 +2,11 @@
 Version C — Full LVC (loss weighting + feature scaling).
 
 Combines both LVC integration mechanisms:
-  1. Confidence-weighted training loss: per-pixel gradient updates are
+  1. Reliability-weighted training loss: per-pixel gradient updates are
      down-weighted for pixels with insufficient lighting variation (low CV2),
      eliminating gradient waste on informationally unreliable pixels.
-  2. Confidence-scaled feature aggregation: per-image feature maps are
-     attenuated by C_k(p) before cross-image aggregation, reducing the
+  2. Reliability-scaled feature aggregation: per-image feature maps are
+     attenuated by R_k(p) before cross-image aggregation, reducing the
      influence of uninformative images on the aggregated representation.
 
 This is the proposed method described in the thesis.
@@ -103,20 +103,20 @@ class NetLVC_Full(nn.Module):
         B, C, H, W, Nmax = I.shape
 
         # ------------------------------------------------------------------
-        # LVC Step 0.5: compute both confidence maps from raw images (float32)
+        # LVC Step 0.5: compute both reliability maps from raw images (float32)
         # Must run BEFORE any normalisation to preserve absolute intensity variance
         # ------------------------------------------------------------------
         with torch.no_grad():
-            C_map, C_k_map = self.lvc(I.float())
-            # C_map  : [B, H, W]       — pixel-level confidence for loss weighting
-            # C_k_map: [B, Nmax, H, W] — per-image confidence for feature scaling
+            R_map, R_k_map = self.lvc(I.float())
+            # R_map  : [B, H, W]       — pixel-level reliability for loss weighting
+            # R_k_map: [B, Nmax, H, W] — per-image reliability for feature scaling
 
-        # Interpolate C_map to decoder resolution for pixel sampling alignment
-        C_dec = F.interpolate(
-            C_map.unsqueeze(1), size=(decoder_resolution, decoder_resolution),
+        # Interpolate R_map to decoder resolution for pixel sampling alignment
+        R_dec = F.interpolate(
+            R_map.unsqueeze(1), size=(decoder_resolution, decoder_resolution),
             mode='bilinear', align_corners=False,
         ).squeeze(1)  # [B, H_dec, W_dec]
-        lvc_w_dec = self.lvc.loss_weights(C_dec)  # [B, H_dec, W_dec]
+        lvc_w_dec = self.lvc.loss_weights(R_dec)  # [B, H_dec, W_dec]
 
         # ------------------------------------------------------------------
         # Image encoder
@@ -132,15 +132,15 @@ class NetLVC_Full(nn.Module):
 
         # ------------------------------------------------------------------
         # LVC feature scaling (Version C adds this on top of Version A)
-        # Attenuate per-image features by C_k before cross-image aggregation
+        # Attenuate per-image features by R_k before cross-image aggregation
         # ------------------------------------------------------------------
         N_per = int(nImgArray[0])
         H_enc, W_enc = glc.shape[-2], glc.shape[-1]
-        C_k_enc = F.interpolate(
-            C_k_map[:, :N_per, :, :].reshape(B * N_per, 1, H, W).float(),
+        R_k_enc = F.interpolate(
+            R_k_map[:, :N_per, :, :].reshape(B * N_per, 1, H, W).float(),
             size=(H_enc, W_enc), mode='bilinear', align_corners=False,
         )  # [B*N, 1, H_enc, W_enc]
-        glc = glc * C_k_enc.to(glc.dtype)
+        glc = glc * R_k_enc.to(glc.dtype)
 
         env_token = light_tokens[:, :, :, :, 0, :]
         point_lights_token = light_tokens[:, :, :, :, 1, :]
@@ -184,7 +184,7 @@ class NetLVC_Full(nn.Module):
             target = range(p, p + nImgArray[b])
             p = p + nImgArray[b]
             m_ = M_dec[b, :, :, :].reshape(-1, decoder_resolution * decoder_resolution).permute(1, 0)
-            ids = np.nonzero(m_.cpu().numpy() > 0)[:, 0]
+            ids = torch.nonzero(m_ > 0)[:, 0].cpu().numpy()
             ids = ids[np.random.permutation(len(ids))]
             idset = [ids[:self.pixel_samples]]
             o_ = I_dec[target, :, :, :].reshape(nImgArray[b], C, decoder_resolution * decoder_resolution).permute(2, 0, 1)
@@ -217,7 +217,7 @@ class NetLVC_Full(nn.Module):
         x_n = F.normalize(x_n, p=2, dim=-1)
 
         # ------------------------------------------------------------------
-        # LVC-weighted loss (Version C — same as Version A)
+        # LVC reliability-weighted loss (Version C — same as Version A)
         # ------------------------------------------------------------------
         mse = self.criterionL2(x_n, n_true)
         loss_gradient = self.criterionL2(conf.exp(), gradient_ids.exp()) * 3

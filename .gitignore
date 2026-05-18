@@ -14,6 +14,6 @@ stat.py
 eval_local.py
 lightning_logs/
 launch_sh/
-data/
+/data/
 huong_dan_chay_diligent.txt
 venv/

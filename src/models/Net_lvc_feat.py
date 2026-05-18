@@ -2,14 +2,14 @@
 Version B — LVC Feature Scaling only.
 
 Scales the per-image feature maps produced by the image encoder by the
-per-image per-pixel confidence C_k(p) before they enter the cross-image
+per-image per-pixel reliability R_k(p) before they enter the cross-image
 aggregation.  Images whose intensity changes little at a given pixel
 contribute a correspondingly attenuated feature, improving the effective
 signal-to-noise ratio of the aggregation step.
 
 Training loss is unchanged from the baseline.
 
-Ablation role: isolates the contribution of the confidence-scaled feature
+Ablation role: isolates the contribution of the reliability-scaled feature
                aggregation (independent of the loss-weighting mechanism).
 """
 
@@ -37,7 +37,7 @@ from src.models.utils.utils import sobel_edge_map
 
 
 class NetLVC_Feat(nn.Module):
-    """LiNo-UniPS + LVC confidence-scaled feature aggregation (Version B)."""
+    """LiNo-UniPS + LVC reliability-scaled feature aggregation (Version B)."""
 
     def __init__(
         self,
@@ -104,10 +104,10 @@ class NetLVC_Feat(nn.Module):
         B, C, H, W, Nmax = I.shape
 
         # ------------------------------------------------------------------
-        # LVC: per-image per-pixel confidence from raw images (float32)
+        # LVC: per-image per-pixel reliability R_k(p) from raw images (float32)
         # ------------------------------------------------------------------
         with torch.no_grad():
-            C_k_map = self.lvc.per_image_confidence(I.float())  # [B, Nmax, H, W]
+            R_k_map = self.lvc.per_image_reliability(I.float())  # [B, Nmax, H, W]
 
         # ------------------------------------------------------------------
         # Image encoder
@@ -122,17 +122,17 @@ class NetLVC_Feat(nn.Module):
         # glc: [B*N, feat_dim, H_enc, W_enc]
 
         # ------------------------------------------------------------------
-        # LVC feature scaling: attenuate per-image features by C_k(p)
+        # LVC feature scaling: attenuate per-image features by R_k(p)
         # Applied BEFORE cross-image aggregation in glc_upsample/glc_aggregation
         # ------------------------------------------------------------------
         N_per = int(nImgArray[0])
         H_enc, W_enc = glc.shape[-2], glc.shape[-1]
-        # Interpolate C_k to encoder feature resolution
-        C_k_enc = F.interpolate(
-            C_k_map[:, :N_per, :, :].reshape(B * N_per, 1, H, W).float(),
+        # Interpolate R_k to encoder feature resolution
+        R_k_enc = F.interpolate(
+            R_k_map[:, :N_per, :, :].reshape(B * N_per, 1, H, W).float(),
             size=(H_enc, W_enc), mode='bilinear', align_corners=False,
         )  # [B*N, 1, H_enc, W_enc]
-        glc = glc * C_k_enc.to(glc.dtype)
+        glc = glc * R_k_enc.to(glc.dtype)
 
         env_token = light_tokens[:, :, :, :, 0, :]
         point_lights_token = light_tokens[:, :, :, :, 1, :]
@@ -175,7 +175,7 @@ class NetLVC_Feat(nn.Module):
             target = range(p, p + nImgArray[b])
             p = p + nImgArray[b]
             m_ = M_dec[b, :, :, :].reshape(-1, decoder_resolution * decoder_resolution).permute(1, 0)
-            ids = np.nonzero(m_.cpu().numpy() > 0)[:, 0]
+            ids = torch.nonzero(m_ > 0)[:, 0].cpu().numpy()
             ids = ids[np.random.permutation(len(ids))]
             idset = [ids[:self.pixel_samples]]
             o_ = I_dec[target, :, :, :].reshape(nImgArray[b], C, decoder_resolution * decoder_resolution).permute(2, 0, 1)

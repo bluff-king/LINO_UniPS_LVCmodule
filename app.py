@@ -282,7 +282,7 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
                             normal_output = gr.Image(label="Normal Output",height=700,)
                             normal_gt = gr.Image(label="Ground Truth",height=700)
                         with gr.Accordion("Advanced Settings", open=True):
-                            numberofimages = gr.Slider(0, 100, label="Number of Images", value=16, step=1)
+                            numberofimages = gr.Slider(0, 12, label="Number of Images", value=4, step=1)
                      
                         run_btn = gr.Button("Run", size="lg", variant="primary")
                         gen_shape_btn = gr.Button("Generate Mesh", size="lg", variant="primary")
@@ -348,9 +348,9 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
     display_data = [
 
         [Image.open("demo/basket/demo.png"), "basket", 8, False, False, "Real","960*960"],
-        [Image.open("demo/key/demo.png"), "key", 8, True, False, "Real","640*640"],
+        [Image.open("demo/key/demo.png"), "key", 4, True, False, "Real","640*640"],
         [Image.open("demo/canandwood/demo.png"), "canandwood", 18, True, False, "Real","4032*2268"],
-        [Image.open("demo/cat/demo.png"), "cat", 96, True, True, "Real","512*612"],
+        [Image.open("demo/cat/demo.png"), "cat", 4, True, True, "Real","512*612"],
         [Image.open("demo/coins_and_keyboard/demo.png"), "coins_and_keyboard", 12, False, False, "Real","4000*4000"],
         [Image.open("demo/owl/demo.png"), "owl", 13, True, False, "Real","2400*1600"],
         [Image.open("demo/rabit/demo.png"), "rabit", 9, True, False, "Real","4000*4000"],
@@ -385,6 +385,9 @@ if __name__ == "__main__":
     # hi3dgen_pipeline = Hi3DGenPipeline.from_pretrained("weights/trellis-normal-v0-1")
     # hi3dgen_pipeline.cuda()    
     predictor = torch.hub.load("houyuanchen111/LINO_UniPS","LINO", local_file_path="weights/lino/lino.pth")
+    # Encoder hardcodes bf16 internally — override Predictor's auto-pick to match
+    # (hubconf picks fp16 for T4 since capability < 8, which mismatches the encoder).
+    predictor.dtype = torch.bfloat16
     predictor.model = predictor.model.to(torch.bfloat16)
     demo.launch(share=True)
 

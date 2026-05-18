@@ -1,12 +1,12 @@
 """
 Version A — LVC Loss only.
 
-Modifies the training loss of LiNo-UniPS with a confidence-weighted
+Modifies the training loss of LiNo-UniPS with a reliability-weighted
 formulation: per-pixel gradient updates are down-weighted for pixels whose
 intensity shows little variation across the K input images (low CV2).
 Feature aggregation is unchanged from the baseline.
 
-Ablation role: isolates the contribution of the confidence-weighted loss
+Ablation role: isolates the contribution of the reliability-weighted loss
                (independent of the feature-scaling mechanism).
 """
 
@@ -36,7 +36,7 @@ from datetime import datetime
 
 
 class NetLVC_Loss(nn.Module):
-    """LiNo-UniPS + LVC confidence-weighted loss (Version A)."""
+    """LiNo-UniPS + LVC reliability-weighted loss (Version A)."""
 
     def __init__(
         self,
@@ -103,16 +103,16 @@ class NetLVC_Loss(nn.Module):
         B, C, H, W, Nmax = I.shape
 
         # ------------------------------------------------------------------
-        # LVC: compute per-pixel confidence from raw images (float32)
+        # LVC: compute per-pixel reliability R(p) from raw images (float32)
         # ------------------------------------------------------------------
         with torch.no_grad():
-            C_map = self.lvc.confidence_map(I.float())  # [B, H, W]
+            R_map = self.lvc.reliability_map(I.float())  # [B, H, W]
         # Interpolate to decoder resolution for pixel-level weighting
-        C_dec = F.interpolate(
-            C_map.unsqueeze(1), size=(decoder_resolution, decoder_resolution),
+        R_dec = F.interpolate(
+            R_map.unsqueeze(1), size=(decoder_resolution, decoder_resolution),
             mode='bilinear', align_corners=False,
         ).squeeze(1)  # [B, H_dec, W_dec]
-        lvc_w_dec = self.lvc.loss_weights(C_dec)  # [B, H_dec, W_dec], in [w_min, 1]
+        lvc_w_dec = self.lvc.loss_weights(R_dec)  # [B, H_dec, W_dec], in [w_min, 1]
 
         # ------------------------------------------------------------------
         # Image encoder (unchanged from baseline)
@@ -167,7 +167,7 @@ class NetLVC_Loss(nn.Module):
             target = range(p, p + nImgArray[b])
             p = p + nImgArray[b]
             m_ = M_dec[b, :, :, :].reshape(-1, decoder_resolution * decoder_resolution).permute(1, 0)
-            ids = np.nonzero(m_.cpu().numpy() > 0)[:, 0]
+            ids = torch.nonzero(m_ > 0)[:, 0].cpu().numpy()
             ids = ids[np.random.permutation(len(ids))]
             idset = [ids[:self.pixel_samples]]
             o_ = I_dec[target, :, :, :].reshape(nImgArray[b], C, decoder_resolution * decoder_resolution).permute(2, 0, 1)
